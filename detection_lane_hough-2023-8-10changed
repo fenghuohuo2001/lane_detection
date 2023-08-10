@@ -343,7 +343,7 @@ def kalman(pre_lane, current_lane):
     # -----------------------------------------------
     kalman_filter = cv2.KalmanFilter(dynamParams=4, measureParams=2)
 
-    kalman_filter.gain = 1
+    kalman_filter.gain = 0.5
     # -----------------------------------------------
     #                系统初值设定
     # 设置初始状态 (x, y, dx, dy) # 斜率截距
@@ -383,14 +383,18 @@ def kalman(pre_lane, current_lane):
     kalman_filter.measurementMatrix = np.array([[1, 0, 0, 0],
                                                 [0, 1, 0, 0]], dtype=np.float32)
 
-    # 设置过程噪声协方差矩阵w
-    kalman_filter.processNoiseCov = np.eye(4, dtype=np.float32) * 0.01
+    # 设置过程噪声协方差矩阵w 越小 与 测量值越不相关
+    # kalman_filter.processNoiseCov = np.eye(4, dtype=np.float32) * 0.01
+    kalman_filter.processNoiseCov = np.array([[1, 0, 0, 0],
+                                              [0, 1, 0, 0],
+                                              [0, 0, 1, 0],
+                                              [0, 0, 0, 1]], dtype=np.float32)*0.01
 
     # 设置测量噪声协方差矩阵v，越小 越靠近测量结果
     # kalman_filter.measurementNoiseCov = np.eye(4, dtype=np.float32) * 1
     # kalman_filter.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1
 
-    kalman_filter.measurementNoiseCov = np.array([[0.5, 0],
+    kalman_filter.measurementNoiseCov = np.array([[1, 0],
                                                   [0, 1000]], dtype=np.float32)
 
     # 初始化测量值(前一帧的检测结果)
@@ -410,7 +414,7 @@ def kalman(pre_lane, current_lane):
     # kalman filter 结果转坐标
     k_r, b_r, dk_r, db_r = current_prediction
 
-    return -b_r/k_r+640, 0, 640, b_r
+    return -b_r/k_r+640, 0, 640, b_r, k_r, b_r
 
 # -------------------------------------------------------------------------
 #                    灰度化 + 边缘检测 + hough检测 主程序
@@ -441,7 +445,7 @@ def detection(img, temp_line, line_history):
     # img_blur_medi = cv2.medianBlur(src_gray, 3, 0)
     # img_blur = cv2.blur(src_gray, (3, 3))
     # cv2.imshow("img_blur_gas", img_blur_gas)
-    cv2.imshow("img_blur_bil", img_blur)
+    # cv2.imshow("img_blur_bil", img_blur)
     # cv2.imshow("img_blur_medi", img_blur_medi)
     # cv2.imshow("img_blur", img_blur)
 
@@ -449,13 +453,13 @@ def detection(img, temp_line, line_history):
     #                         锐化
     # ------------------------------------------------------
     img_sharpen = sharpen(img_blur)
-    cv2.imshow("img_sharpen", img_sharpen)
+    # cv2.imshow("img_sharpen", img_sharpen)
 
     # ------------------------------------------------------
     #                      图像光照增强
     # ------------------------------------------------------
     img_en_gamma = gamma_correction(img_blur, gamma=2)
-    cv2.imshow("img_en_gamma", img_en_gamma)
+    # cv2.imshow("img_en_gamma", img_en_gamma)
 
 
     # ------------------------------------------------------
@@ -511,7 +515,7 @@ def detection(img, temp_line, line_history):
 
     # img_edge = cv2.Laplacian(img_open, cv2.CV_16S, ksize=3)
     # img_edge = cv2.convertScaleAbs(img_edge)
-    cv2.imshow("img_edge_canny", img_edge)
+    # cv2.imshow("img_edge_canny", img_edge)
 
 
     # ------------------------------------------------------
@@ -519,7 +523,7 @@ def detection(img, temp_line, line_history):
     # ------------------------------------------------------
     img_cut, points = get_roi_area(img_edge)
     # img_cut= img_en_gamma
-    cv2.imshow("img_cut", img_cut)
+    # cv2.imshow("img_cut", img_cut)
 
 
     # ------------------------------------------------------
@@ -569,7 +573,7 @@ def detection(img, temp_line, line_history):
         edge_line = edge_line[max_index]
 
         # print("k max is", np.max(k_count))
-        cv2.line(img, (edge_line[0], edge_line[1]), (edge_line[2], edge_line[3]), (0, 0, 255), 2)   # 绘制当前检测结果
+        # cv2.line(img, (edge_line[0], edge_line[1]), (edge_line[2], edge_line[3]), (0, 0, 255), 2)   # 绘制当前检测结果
 
         # ------------------------------------------------------
         #                    kalman-filter
@@ -577,14 +581,22 @@ def detection(img, temp_line, line_history):
         # k_current : 当前斜率     b_current : 当前截距
         # k_last : 上一帧斜率      b_last : 上一帧截距
         # ------------------------------------------------------
-        x1, y1, x2, y2 = kalman(temp_line, edge_line)
+        x1, y1, x2, y2, kalman_k, kalman_b = kalman(temp_line, edge_line)
         print("(int(x1), int(y1)), (int(x2), int(y2))", (int(x1), int(y1)), (int(x2), int(y2)))
         cv2.line(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)   # 绘制卡尔曼滤波检测结果
 
         # ------------------------------------------------------
         #     判断误差，若检测误差小于一定范围，则沿用kalman滤波结果作为下一次的输入
         # ------------------------------------------------------
-
+        # 计算上一次斜率和截距
+        temp_k, temp_b = Calculated_slope(edge_line)
+        if abs(temp_k - kalman_k) < 0.15 or abs(temp_b - kalman_b) < 40:
+            print("*******保留卡尔曼滤波结果")
+            pass
+            edge_line = [int(x1), int(y1), int(x2), int(y2)]
+        else:
+            pass
+            print("不保留卡尔曼滤波结果*******")
         # edge_line = [int(x1), int(y1), int(x2), int(y2)]      # 将卡尔曼滤波结果作为最终检测结果 并于用于下一次检测
     # ------------------------------------------------------
     #      若上一帧检测到，而下一帧没有检测到，则延续前一帧的检测结果
@@ -593,17 +605,17 @@ def detection(img, temp_line, line_history):
         edge_line = temp_line
         if edge_line is not None:
             pass
-            cv2.line(img, (edge_line[0], edge_line[1]), (edge_line[2], edge_line[3]), (0, 0, 255), 2)   # 绘制
+            # cv2.line(img, (edge_line[0], edge_line[1]), (edge_line[2], edge_line[3]), (0, 0, 255), 2)   # 绘制
 
-        x1, y1, x2, y2 = kalman(temp_line, edge_line)
+        x1, y1, x2, y2, kalman_k, kalman_b = kalman(temp_line, edge_line)
         print("(int(x1), int(y1)), (int(x2), int(y2))", (int(x1), int(y1)), (int(x2), int(y2)))
         cv2.line(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)   # 绘制卡尔曼滤波检测结果
         edge_line = [int(x1), int(y1), int(x2), int(y2)]      # 将卡尔曼滤波结果作为最终检测结果 并于用于下一次检测
 
     # cv2.line(img, (348, 168), (636, 219), (255, 0, 0), 2)
-    cv2.imshow("img_line", img)
-    cv2.waitKey(0)
-    img = LaneConverge(img)
+    # cv2.imshow("img_line", img)
+    # cv2.waitKey(0)
+    # img = LaneConverge(img)
     return img, edge_line
 
 
